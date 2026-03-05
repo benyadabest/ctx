@@ -1,0 +1,141 @@
+#!/usr/bin/env python3
+# ~/.context/ctx
+# Minimal CLI for the ctx knowledge infrastructure.
+# Phase 0/1: only `ctx status` is implemented.
+
+import sys, sqlite3, os
+from pathlib import Path
+from datetime import datetime, timezone
+
+CONTEXT_DIR = Path.home() / ".context"
+DB_PATH     = CONTEXT_DIR / "index.db"
+
+
+def cmd_status():
+    print("ctx status")
+    print("=" * 40)
+
+    # Namespace counts
+    def count_files(subdir):
+        d = CONTEXT_DIR / subdir
+        if not d.exists():
+            return 0
+        return sum(1 for f in d.rglob("*.md") if f.is_file())
+
+    namespaces = [
+        ("learnings",          "learnings/"),
+        ("candidates",         "candidates/"),
+        ("patterns",           "patterns/"),
+        ("debugging",          "debugging/"),
+        ("skills/internal",    "skills/internal/"),
+        ("skills/external",    "skills/external/"),
+        ("primitives",         "primitives/"),
+        ("plans/active",       "plans/active/"),
+        ("plans/completed",    "plans/completed/"),
+        ("plans/shelved",      "plans/shelved/"),
+    ]
+
+    print("\nNamespace counts:")
+    for label, subdir in namespaces:
+        n = count_files(subdir)
+        print(f"  {label:<22} {n}")
+
+    # SQLite stats
+    print("\nDatabase:")
+    if not DB_PATH.exists():
+        print("  index.db: not yet created (run ctx-ingest.py to initialize)")
+    else:
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            tables = ["traces", "summaries", "embeddings", "candidates", "knowledge", "meta"]
+            for tbl in tables:
+                try:
+                    n = conn.execute(f"SELECT COUNT(*) FROM {tbl}").fetchone()[0]
+                    print(f"  {tbl:<22} {n} rows")
+                except sqlite3.OperationalError:
+                    print(f"  {tbl:<22} (table not found)")
+            conn.close()
+        except sqlite3.DatabaseError as e:
+            print(f"  error reading index.db: {e}")
+
+    # Last ingest time from meta
+    print("\nPipeline:")
+    if DB_PATH.exists():
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            row = conn.execute(
+                "SELECT value FROM meta WHERE key='last_ingest_ts'"
+            ).fetchone()
+            conn.close()
+            if row:
+                print(f"  last ingest: {row[0]}")
+            else:
+                print("  last ingest: never")
+        except sqlite3.OperationalError:
+            print("  last ingest: never")
+
+    # Watcher status (check if watcher process is running)
+    print("\nProcesses:")
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["pgrep", "-f", "ctx-watcher.py"],
+            capture_output=True, text=True
+        )
+        if result.stdout.strip():
+            print(f"  ctx-watcher: running (pid {result.stdout.strip()})")
+        else:
+            print("  ctx-watcher: not running")
+            print("    start with: python3 ~/.context/ctx-watcher.py &")
+    except Exception:
+        print("  ctx-watcher: unknown")
+
+    # Ollama check
+    import urllib.request
+    try:
+        with urllib.request.urlopen("http://localhost:11434/api/tags", timeout=2) as r:
+            data = r.read()
+            print("  ollama:      running")
+    except Exception:
+        print("  ollama:      not running")
+        print("    start with: ollama serve")
+
+
+def cmd_not_implemented(name):
+    print(f"ctx {name}: not yet implemented (Phase 2+)")
+    print("See ~/.context/ctx-implementation-plan.md for the roadmap.")
+    sys.exit(1)
+
+
+USAGE = """ctx — personal knowledge infrastructure
+
+Usage:
+  ctx status          show namespace counts, pipeline health, last ingest time
+  ctx backfill        [Phase 3] ingest historical sessions
+  ctx discover        [Phase 3] discover sessions without ingesting
+  ctx detect          [Phase 4] manually trigger pattern detection
+  ctx serve           [Phase 4] start approval UI at http://localhost:7337
+  ctx embed           [Phase 2] batch embed un-embedded summaries
+  ctx compile <task>  [Phase 5] compile context bundle for a task
+"""
+
+
+def main():
+    if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help"):
+        print(USAGE)
+        return
+
+    cmd = sys.argv[1]
+
+    if cmd == "status":
+        cmd_status()
+    elif cmd in ("backfill", "discover", "detect", "serve", "embed", "compile"):
+        cmd_not_implemented(cmd)
+    else:
+        print(f"ctx: unknown command '{cmd}'")
+        print(USAGE)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

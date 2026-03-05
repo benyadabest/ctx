@@ -1,3 +1,8 @@
+# Copy this file to ctx.toml and fill in your values.
+# ctx.toml is gitignored — never commit it directly.
+# Required: ANTHROPIC_API_KEY (or set in [api] below)
+# Optional: NEO4J_PASSWORD (only if neo4j_enabled = true)
+
 [capture]
 cursor_dir   = "~/.cursor/projects"
 claude_dir   = "~/.claude/projects"
@@ -26,10 +31,10 @@ port = 7337
 neo4j_enabled   = false    # flip after backfill
 neo4j_uri       = "bolt://localhost:7687"
 neo4j_user      = "neo4j"
-neo4j_password  = ""
+neo4j_password  = ""       # set via NEO4J_PASSWORD env var
 
 [api]
-anthropic_api_key = ""     # or set ANTHROPIC_API_KEY env var
+anthropic_api_key = ""     # set via ANTHROPIC_API_KEY env var
 ollama_base_url   = "http://localhost:11434"
 
 # ── Model routing ─────────────────────────────────────────────────────────────
@@ -48,6 +53,6 @@ ollama_base_url   = "http://localhost:11434"
 #                Medium-frequency, medium-stakes. Sonnet is correct default.
 #
 [models]
-summarize = "ollama/llama3.2"           # default: local. swap to "claude-haiku-4-5-20251001" for higher quality
-detect    = "claude-sonnet-4-6"         # default: Sonnet. never use local here.
-compile   = "claude-sonnet-4-6"         # default: Sonnet. swap to "ollama/llama3.2" if offline.
+summarize = "ollama/mistral"            # best reliability for structured extraction
+detect    = "claude-sonnet-4-6"         # never compromise here
+compile   = "claude-sonnet-4-6"         # swap to "ollama/mistral" if offline
