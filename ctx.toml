@@ -1,0 +1,53 @@
+[capture]
+cursor_dir   = "~/.cursor/projects"
+claude_dir   = "~/.claude/projects"
+context_dir  = "~/.context"
+
+[detection]
+batch_size   = 20          # run detection every N summarized traces
+min_freq     = 3           # minimum occurrences to surface a candidate
+
+[ranking]
+similarity   = 0.60
+frequency    = 0.25
+recency      = 0.15
+recency_halflife_days = 30
+
+[compile]
+top_k_skills    = 3
+top_k_patterns  = 2
+top_k_learnings = 3
+output_dir      = "~/.context/compiled"
+
+[serve]
+port = 7337
+
+[integrations]
+neo4j_enabled   = false    # flip after backfill
+neo4j_uri       = "bolt://localhost:7687"
+neo4j_user      = "neo4j"
+neo4j_password  = ""
+
+[api]
+anthropic_api_key = ""     # or set ANTHROPIC_API_KEY env var
+ollama_base_url   = "http://localhost:11434"
+
+# ── Model routing ─────────────────────────────────────────────────────────────
+# Each task routes to an independent model. Prefix determines provider:
+#   "ollama/<model>"   → local, offline, free
+#   "claude-*"         → Anthropic API
+#
+# Task profiles:
+#   summarize  — per-trace structured JSON extraction. Runs constantly.
+#                High-frequency, low-stakes. Local model is correct default.
+#
+#   detect     — second-order synthesis across 20 traces. Runs every ~20 sessions.
+#                Low-frequency, high-stakes. Needs a smart model.
+#
+#   compile    — open question inference + context synthesis on demand.
+#                Medium-frequency, medium-stakes. Sonnet is correct default.
+#
+[models]
+summarize = "ollama/llama3.2"           # default: local. swap to "claude-haiku-4-5-20251001" for higher quality
+detect    = "claude-sonnet-4-6"         # default: Sonnet. never use local here.
+compile   = "claude-sonnet-4-6"         # default: Sonnet. swap to "ollama/llama3.2" if offline.
