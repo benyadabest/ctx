@@ -277,6 +277,121 @@ def _format_claude_code_body(user_msgs: list, assistant_msgs: list) -> str:
     return "\n".join(parts)
 
 
+# ── Cursor transcript text flow (backfill) ─────────────────────────────────────
+
+def ingest_cursor_transcript(txt_path: str, workspace_hint: str = "", project_hint: str = ""):
+    """Ingest a Cursor agent-transcripts/*.txt file (plaintext format)."""
+    path = Path(txt_path)
+    if not path.exists():
+        print(f"ctx-ingest: file not found: {txt_path}", file=sys.stderr)
+        sys.exit(1)
+
+    content = path.read_text(errors="replace")
+    if not content.strip():
+        print(f"ctx-ingest: empty transcript: {txt_path}", file=sys.stderr)
+        return
+
+    # Derive stable ID from file path
+    path_hash = hashlib.md5(str(path).encode()).hexdigest()[:8]
+    trace_id  = f"trace-{path_hash}"
+
+    # Extract first user prompt
+    prompt = ""
+    lines = content.split("\n")
+    in_user = False
+    prompt_lines = []
+    for line in lines:
+        if line.strip() == "user:":
+            in_user = True
+            continue
+        if line.strip() == "assistant:" and in_user:
+            break
+        if in_user:
+            # Skip XML-like tags for cleaner prompt
+            stripped = line.strip()
+            if stripped.startswith("<") and stripped.endswith(">"):
+                continue
+            if stripped:
+                prompt_lines.append(stripped)
+    # Use the user_query content if found, else first non-tag lines
+    for i, line in enumerate(lines):
+        if "<user_query>" in line and i + 1 < len(lines):
+            query_lines = []
+            for j in range(i + 1, len(lines)):
+                if "</user_query>" in lines[j]:
+                    break
+                query_lines.append(lines[j].strip())
+            if query_lines:
+                prompt = " ".join(query_lines)
+            break
+    if not prompt and prompt_lines:
+        prompt = " ".join(prompt_lines[:5])
+
+    # Extract mentioned file paths from tool calls
+    files_modified = []
+    for line in lines:
+        if "file_path" in line.lower() or "path=" in line.lower():
+            # Simple extraction from tool call patterns
+            for part in line.split('"'):
+                if "/" in part and ("." in part.split("/")[-1] if "/" in part else False):
+                    if part not in files_modified and len(part) < 200:
+                        files_modified.append(part)
+
+    # Derive workspace/project from parent dir name or hint
+    workspace = workspace_hint
+    project = project_hint
+    if not project:
+        # Try to extract from the transcript dir path
+        parent = path.parent.parent.name  # e.g. Users-benshvartsman-coding-coach-chatbot
+        parts = parent.replace("Users-benshvartsman-", "").split("-")
+        noise = {"Library", "Application", "Support", "Cursor", "Workspaces", "workspace", "json"}
+        clean = [p for p in parts if p not in noise and not p.isdigit()]
+        project = clean[-1] if clean else parent[:20]
+
+    # Get timestamp from file mtime
+    try:
+        mtime = path.stat().st_mtime
+        ts = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
+    except OSError:
+        ts = datetime.now(timezone.utc).isoformat()
+
+    conversation_id = path.stem  # UUID from filename
+
+    learn_name = f"cursor-trace-{ts[:10]}-{path_hash}.md"
+
+    # Build a truncated body for the learning
+    body_content = content[:3000] if len(content) > 3000 else content
+
+    _write_learning_md(
+        trace_id=trace_id,
+        conversation_id=conversation_id,
+        ts=ts,
+        source="cursor",
+        status="completed",
+        workspace=workspace,
+        project=project,
+        prompt=prompt,
+        files_modified=files_modified[:20],
+        loop_count=content.count("\nassistant:"),
+        raw_path=str(path),
+        learn_name=learn_name,
+    )
+
+    _upsert_trace(
+        trace_id=trace_id,
+        conversation_id=conversation_id,
+        ts=ts,
+        source="cursor",
+        status="completed",
+        workspace=workspace,
+        project=project,
+        prompt=prompt,
+        files_modified=files_modified[:20],
+        loop_count=content.count("\nassistant:"),
+        raw_path=str(path),
+    )
+
+
 # ── Shared output ──────────────────────────────────────────────────────────────
 
 def _write_learning_md(
@@ -357,8 +472,9 @@ def _upsert_trace(
 def main():
     if len(sys.argv) < 2:
         print("Usage:")
-        print("  ctx-ingest.py <conversation_id>           # Cursor raw/ flow")
-        print("  ctx-ingest.py --claude-code <jsonl_path>  # Claude Code JSONL")
+        print("  ctx-ingest.py <conversation_id>                              # Cursor raw/ flow")
+        print("  ctx-ingest.py --claude-code <jsonl_path>                     # Claude Code JSONL")
+        print("  ctx-ingest.py --cursor-transcript <txt_path> [workspace] [project]  # Cursor transcript")
         sys.exit(1)
 
     if sys.argv[1] == "--claude-code":
@@ -366,6 +482,13 @@ def main():
             print("ctx-ingest: --claude-code requires a path argument", file=sys.stderr)
             sys.exit(1)
         ingest_claude_code(sys.argv[2])
+    elif sys.argv[1] == "--cursor-transcript":
+        if len(sys.argv) < 3:
+            print("ctx-ingest: --cursor-transcript requires a path argument", file=sys.stderr)
+            sys.exit(1)
+        workspace = sys.argv[3] if len(sys.argv) > 3 else ""
+        project = sys.argv[4] if len(sys.argv) > 4 else ""
+        ingest_cursor_transcript(sys.argv[2], workspace, project)
     else:
         ingest_cursor(sys.argv[1])
 

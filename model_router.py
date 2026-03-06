@@ -2,7 +2,7 @@
 # Single module that all scripts import for model calls.
 # Swapping a model means changing one line in ctx.toml — nothing else.
 
-import json, os, urllib.request
+import json, os, urllib.request, urllib.error
 from pathlib import Path
 try:
     import toml
@@ -21,7 +21,8 @@ def get_model(task: str) -> str:
     return _config()["models"][task]
 
 
-def call(task: str, prompt: str, system: str = "", max_tokens: int = 1000) -> str:
+def call(task: str, prompt: str, system: str = "", max_tokens: int = 1000,
+         temperature: float = None) -> str:
     """
     Route a call to the correct model for the given task.
     Handles both Ollama and Anthropic transparently.
@@ -33,6 +34,7 @@ def call(task: str, prompt: str, system: str = "", max_tokens: int = 1000) -> st
             model=model.removeprefix("ollama/"),
             prompt=prompt,
             system=system,
+            temperature=temperature,
         )
     else:
         return _call_anthropic(
@@ -40,19 +42,23 @@ def call(task: str, prompt: str, system: str = "", max_tokens: int = 1000) -> st
             prompt=prompt,
             system=system,
             max_tokens=max_tokens,
+            temperature=temperature,
         )
 
 
-def _call_ollama(model: str, prompt: str, system: str) -> str:
+def _call_ollama(model: str, prompt: str, system: str, temperature: float = None) -> str:
     cfg     = _config()
     base    = cfg["api"].get("ollama_base_url", "http://localhost:11434")
-    payload = json.dumps({
+    body    = {
         "model":  model,
         "prompt": prompt,
         "system": system,
         "stream": False,
         "format": "json",   # critical: forces structured output, prevents markdown wrapping
-    }).encode()
+    }
+    if temperature is not None:
+        body["options"] = {"temperature": temperature}
+    payload = json.dumps(body).encode()
 
     req = urllib.request.Request(
         f"{base}/api/generate",
@@ -67,18 +73,23 @@ def _call_ollama(model: str, prompt: str, system: str) -> str:
                            f"Is Ollama running? Try: ollama serve") from e
 
 
-def _call_anthropic(model: str, prompt: str, system: str, max_tokens: int) -> str:
+def _call_anthropic(model: str, prompt: str, system: str, max_tokens: int,
+                    temperature: float = None) -> str:
     cfg     = _config()
     api_key = cfg["api"].get("anthropic_api_key") or os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
         raise RuntimeError("No Anthropic API key. Set in ctx.toml [api] or ANTHROPIC_API_KEY env var.")
 
-    payload = json.dumps({
+    body = {
         "model":      model,
         "max_tokens": max_tokens,
-        "system":     system,
         "messages":   [{"role": "user", "content": prompt}],
-    }).encode()
+    }
+    if system:
+        body["system"] = system
+    if temperature is not None:
+        body["temperature"] = temperature
+    payload = json.dumps(body).encode()
 
     req = urllib.request.Request(
         "https://api.anthropic.com/v1/messages",
@@ -89,9 +100,15 @@ def _call_anthropic(model: str, prompt: str, system: str, max_tokens: int) -> st
             "anthropic-version": "2023-06-01",
         },
     )
-    with urllib.request.urlopen(req, timeout=60) as r:
-        data = json.loads(r.read())
-        return data["content"][0]["text"]
+    try:
+        with urllib.request.urlopen(req, timeout=120) as r:
+            data = json.loads(r.read())
+            return data["content"][0]["text"]
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode() if e.fp else ""
+        raise RuntimeError(
+            f"Anthropic API error {e.code}: {err_body[:500]}"
+        ) from e
 
 
 if __name__ == "__main__":

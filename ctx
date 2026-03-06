@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 # ~/.context/ctx
-# Minimal CLI for the ctx knowledge infrastructure.
-# Phase 0/1: only `ctx status` is implemented.
+# CLI for the ctx knowledge infrastructure.
 
-import sys, sqlite3, os
+import sys, sqlite3, os, json, re, hashlib, shutil, subprocess
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -11,11 +10,35 @@ CONTEXT_DIR = Path.home() / ".context"
 DB_PATH     = CONTEXT_DIR / "index.db"
 
 
+def _run_embed(source_id: str = None):
+    """Run ctx-embed.py for a specific source or skip if not available."""
+    script = CONTEXT_DIR / "ctx-embed.py"
+    if not script.exists():
+        return
+    cmd = [sys.executable, str(script)]
+    if source_id:
+        cmd.append(source_id)
+    try:
+        subprocess.run(cmd, capture_output=True, timeout=120)
+    except Exception:
+        pass
+
+
+def _upsert_knowledge(conn, kid, namespace, slug, file_path, summary, tags="[]"):
+    """Upsert into knowledge table."""
+    conn.execute(
+        "INSERT INTO knowledge (id, namespace, slug, file_path, summary, tags, frequency, promoted_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, 1, ?) "
+        "ON CONFLICT(id) DO UPDATE SET summary=excluded.summary, tags=excluded.tags, file_path=excluded.file_path",
+        (kid, namespace, slug, file_path, summary, tags, datetime.now(timezone.utc).isoformat()),
+    )
+    conn.commit()
+
+
 def cmd_status():
     print("ctx status")
     print("=" * 40)
 
-    # Namespace counts
     def count_files(subdir):
         d = CONTEXT_DIR / subdir
         if not d.exists():
@@ -30,9 +53,8 @@ def cmd_status():
         ("skills/internal",    "skills/internal/"),
         ("skills/external",    "skills/external/"),
         ("primitives",         "primitives/"),
-        ("plans/active",       "plans/active/"),
-        ("plans/completed",    "plans/completed/"),
-        ("plans/shelved",      "plans/shelved/"),
+        ("docs",               "docs/"),
+        ("plans",              "plans/"),
     ]
 
     print("\nNamespace counts:")
@@ -40,14 +62,13 @@ def cmd_status():
         n = count_files(subdir)
         print(f"  {label:<22} {n}")
 
-    # SQLite stats
     print("\nDatabase:")
     if not DB_PATH.exists():
         print("  index.db: not yet created (run ctx-ingest.py to initialize)")
     else:
         try:
             conn = sqlite3.connect(DB_PATH)
-            tables = ["traces", "summaries", "embeddings", "candidates", "knowledge", "meta"]
+            tables = ["traces", "summaries", "embeddings", "chunks", "candidates", "knowledge", "meta"]
             for tbl in tables:
                 try:
                     n = conn.execute(f"SELECT COUNT(*) FROM {tbl}").fetchone()[0]
@@ -58,30 +79,23 @@ def cmd_status():
         except sqlite3.DatabaseError as e:
             print(f"  error reading index.db: {e}")
 
-    # Last ingest time from meta
     print("\nPipeline:")
     if DB_PATH.exists():
         try:
             conn = sqlite3.connect(DB_PATH)
-            row = conn.execute(
-                "SELECT value FROM meta WHERE key='last_ingest_ts'"
-            ).fetchone()
+            for key, label in [("last_ingest_ts", "last ingest"),
+                               ("last_summarize_ts", "last summarize"),
+                               ("last_backfill_ts", "last backfill")]:
+                row = conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+                print(f"  {label}: {row[0] if row else 'never'}")
             conn.close()
-            if row:
-                print(f"  last ingest: {row[0]}")
-            else:
-                print("  last ingest: never")
         except sqlite3.OperationalError:
             print("  last ingest: never")
 
-    # Watcher status (check if watcher process is running)
     print("\nProcesses:")
     import subprocess
     try:
-        result = subprocess.run(
-            ["pgrep", "-f", "ctx-watcher.py"],
-            capture_output=True, text=True
-        )
+        result = subprocess.run(["pgrep", "-f", "ctx-watcher.py"], capture_output=True, text=True)
         if result.stdout.strip():
             print(f"  ctx-watcher: running (pid {result.stdout.strip()})")
         else:
@@ -90,33 +104,368 @@ def cmd_status():
     except Exception:
         print("  ctx-watcher: unknown")
 
-    # Ollama check
+    try:
+        result = subprocess.run(["pgrep", "-f", "ctx-serve.py"], capture_output=True, text=True)
+        if result.stdout.strip():
+            print(f"  ctx-serve:   running (pid {result.stdout.strip()})")
+        else:
+            print("  ctx-serve:   not running")
+    except Exception:
+        pass
+
     import urllib.request
     try:
         with urllib.request.urlopen("http://localhost:11434/api/tags", timeout=2) as r:
-            data = r.read()
+            r.read()
             print("  ollama:      running")
     except Exception:
         print("  ollama:      not running")
         print("    start with: ollama serve")
 
 
-def cmd_not_implemented(name):
-    print(f"ctx {name}: not yet implemented (Phase 2+)")
-    print("See ~/.context/ctx-implementation-plan.md for the roadmap.")
-    sys.exit(1)
+def cmd_delegate(script_name, extra_args=None):
+    """Delegate to a ctx script, passing through remaining CLI args."""
+    script = CONTEXT_DIR / script_name
+    if not script.exists():
+        print(f"ctx: {script_name} not found at {script}", file=sys.stderr)
+        sys.exit(1)
+    args = extra_args if extra_args else sys.argv[2:]
+    os.execv(sys.executable, [sys.executable, str(script)] + args)
 
 
-USAGE = """ctx — personal knowledge infrastructure
+# ── ctx push ───────────────────────────────────────────────────────────────────
+
+def cmd_push():
+    """ctx push <file|url> --namespace <ns>"""
+    args = sys.argv[2:]
+    ns = None
+    source = None
+
+    # Parse args
+    i = 0
+    positional = []
+    while i < len(args):
+        if args[i] in ("--namespace", "--ns", "-n"):
+            if i + 1 < len(args):
+                ns = args[i + 1]
+                i += 2
+                continue
+            else:
+                print("ctx push: --namespace requires a value", file=sys.stderr)
+                sys.exit(1)
+        else:
+            positional.append(args[i])
+        i += 1
+
+    if not positional:
+        print("ctx push: provide a file path or URL", file=sys.stderr)
+        print("  ctx push myfile.md --namespace skills/external", file=sys.stderr)
+        print("  ctx push https://example.com/article --namespace skills/external", file=sys.stderr)
+        sys.exit(1)
+
+    source = positional[0]
+
+    # Valid namespaces for push
+    valid_ns = [
+        "patterns", "debugging", "skills/internal", "skills/external",
+        "primitives", "docs", "plans",
+    ]
+    if not ns:
+        print("ctx push: --namespace required. Options:", file=sys.stderr)
+        for v in valid_ns:
+            print(f"  {v}", file=sys.stderr)
+        sys.exit(1)
+    if ns not in valid_ns:
+        print(f"ctx push: invalid namespace '{ns}'. Options:", file=sys.stderr)
+        for v in valid_ns:
+            print(f"  {v}", file=sys.stderr)
+        sys.exit(1)
+
+    target_dir = CONTEXT_DIR / ns
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    if source.startswith("http://") or source.startswith("https://"):
+        dest = _push_url(source, target_dir, ns)
+    else:
+        dest = _push_file(source, target_dir)
+
+    # Chunk+embed and add to knowledge
+    if dest and DB_PATH.exists():
+        rel = str(dest.relative_to(CONTEXT_DIR))
+        ns_key = ns.replace("/", "_")
+        slug = dest.stem
+        source_id = f"ns-{ns.replace('/', '-')}-{slug}"
+        conn = sqlite3.connect(DB_PATH)
+        # Extract first line of body as summary
+        content = dest.read_text()
+        body = content
+        if content.startswith("---"):
+            parts = content.split("---", 2)
+            body = parts[2].strip() if len(parts) >= 3 else content
+        summary = body.split("\n")[0][:200] if body else slug
+        _upsert_knowledge(conn, f"push-{ns_key}-{slug}", ns_key, slug, rel, summary)
+        conn.close()
+        print(f"  knowledge: push-{ns_key}-{slug}")
+        _run_embed(source_id)
+        print(f"  embedded: {source_id}")
+
+
+def _push_file(src_path: str, target_dir: Path):
+    src = Path(src_path).expanduser().resolve()
+    if not src.exists():
+        print(f"ctx push: file not found: {src}", file=sys.stderr)
+        sys.exit(1)
+    dest = target_dir / src.name
+    if not dest.suffix:
+        dest = dest.with_suffix(".md")
+    shutil.copy2(str(src), str(dest))
+    print(f"ctx push: {src.name} -> {dest.relative_to(CONTEXT_DIR)}")
+    return dest
+
+
+def _push_url(url: str, target_dir: Path, ns: str):
+    import urllib.request
+    # Derive a slug from the URL
+    slug = re.sub(r'https?://', '', url)
+    slug = re.sub(r'[^a-z0-9]+', '-', slug.lower()).strip('-')[:50]
+
+    now = datetime.now(timezone.utc).isoformat()[:10]
+    frontmatter = f"""---
+id: {ns.replace('/', '-')}-{slug[:30]}
+source: external
+url: {url}
+added_at: {now}
+tags: []
+---
+"""
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "ctx/1.0"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            content_type = r.headers.get("Content-Type", "")
+            body = r.read().decode("utf-8", errors="replace")
+    except Exception as e:
+        print(f"ctx push: failed to fetch URL: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # If it's markdown or text, use as-is; otherwise just save the URL as a reference
+    if "text/" in content_type or content_type == "":
+        # Strip HTML tags for basic readability if HTML
+        if "html" in content_type:
+            body = re.sub(r'<script[^>]*>.*?</script>', '', body, flags=re.DOTALL)
+            body = re.sub(r'<style[^>]*>.*?</style>', '', body, flags=re.DOTALL)
+            body = re.sub(r'<[^>]+>', '', body)
+            body = re.sub(r'\n{3,}', '\n\n', body)
+            body = body[:5000]  # cap
+    else:
+        body = f"(Binary content at {url})"
+
+    dest = target_dir / f"{slug}.md"
+    dest.write_text(f"{frontmatter}\n# {slug}\n\nSource: {url}\n\n{body}\n")
+    print(f"ctx push: {url} -> {dest.relative_to(CONTEXT_DIR)}")
+    return dest
+
+
+# ── ctx tag ────────────────────────────────────────────────────────────────────
+
+def cmd_tag():
+    """ctx tag <file> <tag> [<tag2> ...]"""
+    args = sys.argv[2:]
+    if len(args) < 2:
+        print("ctx tag: provide a file path and at least one tag", file=sys.stderr)
+        print("  ctx tag learnings/my-trace.md eval-design", file=sys.stderr)
+        sys.exit(1)
+
+    file_path = args[0]
+    new_tags = [t.lower().strip() for t in args[1:]]
+
+    # Resolve relative to CONTEXT_DIR
+    full = CONTEXT_DIR / file_path
+    if not full.exists():
+        # Try as absolute path
+        full = Path(file_path).expanduser().resolve()
+    if not full.exists():
+        print(f"ctx tag: file not found: {file_path}", file=sys.stderr)
+        sys.exit(1)
+
+    content = full.read_text()
+
+    # Parse existing tags
+    m = re.search(r'^tags:\s*\[([^\]]*)\]', content, re.MULTILINE)
+    existing = []
+    if m:
+        existing = [t.strip().strip('"').strip("'") for t in m.group(1).split(",") if t.strip()]
+
+    # Merge
+    merged = list(dict.fromkeys(existing + new_tags))
+    tags_str = "[" + ", ".join(merged) + "]"
+
+    if m:
+        content = re.sub(r'^tags:\s*\[.*\]', f'tags: {tags_str}', content, count=1, flags=re.MULTILINE)
+    elif "---" in content:
+        parts = content.split("---", 2)
+        if len(parts) >= 3:
+            content = f"---{parts[1]}tags: {tags_str}\n---{parts[2]}"
+
+    full.write_text(content)
+    added = [t for t in new_tags if t not in existing]
+    print(f"ctx tag: {file_path} -> tags: {tags_str}")
+    if added:
+        print(f"  added: {', '.join(added)}")
+
+    # Update knowledge table if this file is tracked
+    if DB_PATH.exists():
+        conn = sqlite3.connect(DB_PATH)
+        rel = str(full.relative_to(CONTEXT_DIR)) if str(full).startswith(str(CONTEXT_DIR)) else file_path
+        conn.execute(
+            "UPDATE knowledge SET tags = ? WHERE file_path = ?",
+            (json.dumps(merged), rel),
+        )
+        if conn.total_changes > 0:
+            print(f"  knowledge tags updated")
+        conn.commit()
+        conn.close()
+
+
+# ── ctx note ───────────────────────────────────────────────────────────────────
+
+def cmd_note():
+    """ctx note "free text" — create a quick note in learnings/"""
+    args = sys.argv[2:]
+    if not args:
+        print("ctx note: provide text", file=sys.stderr)
+        print('  ctx note "TIL: you can use --force to skip the 20-trace gate"', file=sys.stderr)
+        sys.exit(1)
+
+    text = " ".join(args)
+    now = datetime.now(timezone.utc)
+    ts = now.isoformat()
+    date = now.strftime("%Y-%m-%d")
+    short_id = hashlib.md5(text.encode()).hexdigest()[:8]
+
+    learn_dir = CONTEXT_DIR / "learnings"
+    learn_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"note-{date}-{short_id}.md"
+    filepath = learn_dir / filename
+
+    content = f"""---
+id: note-{short_id}
+ts: {ts}
+source: manual
+status: completed
+workspace: manual
+project: notes
+tags: [note]
+---
+
+## Note
+
+{text}
+"""
+    filepath.write_text(content)
+    print(f"ctx note: {filepath.relative_to(CONTEXT_DIR)}")
+
+    # Also insert into traces table if DB exists
+    if DB_PATH.exists():
+        trace_id = f"note-{short_id}"
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute(
+            "INSERT OR IGNORE INTO traces (id, conversation_id, ts, source, status, "
+            "workspace, project, prompt, files_modified, loop_count, raw_path) "
+            "VALUES (?, ?, ?, 'manual', 'completed', 'manual', 'notes', ?, '[]', 0, ?)",
+            (trace_id, trace_id, ts, text, str(filepath)),
+        )
+        # Auto-summarize: for notes, the text IS the summary
+        conn.execute(
+            "INSERT INTO summaries (trace_id, problem, pattern, skills, pitfalls, embedding_text, "
+            "project_tag, component, domain_knowledge) "
+            "VALUES (?, ?, '', '[]', '[]', ?, 'notes', '', ?) "
+            "ON CONFLICT(trace_id) DO UPDATE SET embedding_text=excluded.embedding_text",
+            (trace_id, text[:200], text, text),
+        )
+        conn.commit()
+        conn.close()
+        print(f"  trace: {trace_id}")
+
+        # Embed the note
+        _run_embed(trace_id)
+        print(f"  embedded: {trace_id}")
+
+
+# ── ctx forget ─────────────────────────────────────────────────────────────────
+
+def cmd_forget():
+    """ctx forget <id> — remove a trace and its summary/embedding from the DB."""
+    args = sys.argv[2:]
+    if not args:
+        print("ctx forget: provide a trace ID", file=sys.stderr)
+        print("  ctx forget trace-4edf41ab", file=sys.stderr)
+        sys.exit(1)
+
+    trace_id = args[0]
+
+    if not DB_PATH.exists():
+        print("ctx forget: index.db not found", file=sys.stderr)
+        sys.exit(1)
+
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute("SELECT id, project, prompt FROM traces WHERE id = ?", (trace_id,)).fetchone()
+    if not row:
+        print(f"ctx forget: trace '{trace_id}' not found", file=sys.stderr)
+        conn.close()
+        sys.exit(1)
+
+    # Show what we're deleting
+    print(f"Forgetting: {row[0]}")
+    print(f"  project: {row[1] or '(none)'}")
+    print(f"  prompt:  {(row[2] or '(none)')[:80]}")
+
+    # Delete from all tables
+    conn.execute("DELETE FROM embeddings WHERE trace_id = ?", (trace_id,))
+    conn.execute("DELETE FROM summaries WHERE trace_id = ?", (trace_id,))
+    conn.execute("DELETE FROM traces WHERE id = ?", (trace_id,))
+    # Also clean up chunks if any reference this trace
+    try:
+        conn.execute("DELETE FROM chunks WHERE source_id = ?", (trace_id,))
+    except sqlite3.OperationalError:
+        pass
+    # Clean up knowledge if referenced
+    try:
+        conn.execute("DELETE FROM knowledge WHERE id = ?", (trace_id,))
+    except sqlite3.OperationalError:
+        pass
+    conn.commit()
+    conn.close()
+
+    # Remove the learnings .md file if it exists
+    learn_dir = CONTEXT_DIR / "learnings"
+    if learn_dir.exists():
+        for md in learn_dir.glob("*.md"):
+            content = md.read_text()[:500]
+            if f"id: {trace_id}" in content:
+                md.unlink()
+                print(f"  deleted: {md.relative_to(CONTEXT_DIR)}")
+                break
+
+    print("  done")
+
+
+# ── Usage + dispatch ───────────────────────────────────────────────────────────
+
+USAGE = """ctx -- personal knowledge infrastructure
 
 Usage:
-  ctx status          show namespace counts, pipeline health, last ingest time
-  ctx backfill        [Phase 3] ingest historical sessions
-  ctx discover        [Phase 3] discover sessions without ingesting
-  ctx detect          [Phase 4] manually trigger pattern detection
-  ctx serve           [Phase 4] start approval UI at http://localhost:7337
-  ctx embed           [Phase 2] batch embed un-embedded summaries
-  ctx compile <task>  [Phase 5] compile context bundle for a task
+  ctx status                          pipeline health, counts, timestamps
+  ctx discover                        discover sessions without ingesting
+  ctx backfill                        ingest historical sessions (--dry-run, --limit N, --after DATE)
+  ctx detect                          trigger pattern detection (--force, --dry-run)
+  ctx serve                           start approval UI at http://localhost:7337
+  ctx embed                           batch embed un-embedded summaries (--all)
+  ctx compile <task>                  compile context bundle (--tag <project>)
+  ctx push <file|url> --namespace <ns>  add a file or URL to a namespace
+  ctx tag <file> <tag> [<tag2> ...]   add tags to a file's frontmatter
+  ctx note "free text"                create a quick note in learnings/
+  ctx forget <id>                     remove a trace and its data
+  ctx synthesize [flags]              synthesize skill/pattern from sources
 """
 
 
@@ -127,10 +476,23 @@ def main():
 
     cmd = sys.argv[1]
 
-    if cmd == "status":
-        cmd_status()
-    elif cmd in ("backfill", "discover", "detect", "serve", "embed", "compile"):
-        cmd_not_implemented(cmd)
+    dispatch = {
+        "status":   cmd_status,
+        "discover": lambda: cmd_delegate("ctx-discover.py"),
+        "backfill": lambda: cmd_delegate("ctx-backfill.py"),
+        "detect":   lambda: cmd_delegate("ctx-detect.py"),
+        "serve":    lambda: cmd_delegate("ctx-serve.py"),
+        "embed":    lambda: cmd_delegate("ctx-embed.py"),
+        "compile":  lambda: cmd_delegate("ctx-compile.py"),
+        "push":       cmd_push,
+        "tag":        cmd_tag,
+        "note":       cmd_note,
+        "forget":     cmd_forget,
+        "synthesize": lambda: cmd_delegate("ctx-synthesize.py"),
+    }
+
+    if cmd in dispatch:
+        dispatch[cmd]()
     else:
         print(f"ctx: unknown command '{cmd}'")
         print(USAGE)
