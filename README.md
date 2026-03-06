@@ -2,6 +2,8 @@
 
 Personal knowledge infrastructure that captures AI dev sessions, indexes them, and compiles relevant context for future sessions.
 
+https://ben.shvartsman.com/writings/ctx-continual-learning-for-agents.html
+
 ## What it does
 
 1. **Captures** Cursor and Claude Code sessions automatically via hooks and file watchers
