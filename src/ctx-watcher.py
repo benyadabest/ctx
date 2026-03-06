@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 
 CONTEXT_DIR   = Path.home() / ".context"
 CLAUDE_DIR    = Path.home() / ".claude" / "projects"
-INGEST_SCRIPT = CONTEXT_DIR / "ctx-ingest.py"
+INGEST_SCRIPT = CONTEXT_DIR / "src" / "ctx-ingest.py"
 POLL_INTERVAL = 30  # seconds
 
 # Track already-processed files: path → mtime

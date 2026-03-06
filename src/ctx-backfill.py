@@ -19,9 +19,10 @@ CONTEXT_DIR = Path.home() / ".context"
 CURSOR_DIR  = Path.home() / ".cursor" / "projects"
 CLAUDE_DIR  = Path.home() / ".claude" / "projects"
 DB_PATH     = CONTEXT_DIR / "index.db"
-INGEST      = CONTEXT_DIR / "ctx-ingest.py"
-SUMMARIZE   = CONTEXT_DIR / "ctx-summarize.py"
-EMBED       = CONTEXT_DIR / "ctx-embed.py"
+SRC_DIR     = CONTEXT_DIR / "src"
+INGEST      = SRC_DIR / "ctx-ingest.py"
+SUMMARIZE   = SRC_DIR / "ctx-summarize.py"
+EMBED       = SRC_DIR / "ctx-embed.py"
 PYTHON      = sys.executable
 
 

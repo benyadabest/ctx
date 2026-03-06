@@ -31,7 +31,7 @@ def main():
     print(f"ctx-hook: wrote {out_path}", file=sys.stderr)
 
     if event == "stop":
-        ingest_script = CONTEXT_DIR / "ctx-ingest.py"
+        ingest_script = CONTEXT_DIR / "src" / "ctx-ingest.py"
         if ingest_script.exists():
             subprocess.Popen(
                 [sys.executable, str(ingest_script), conversation_id],

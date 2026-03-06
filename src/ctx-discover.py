@@ -31,18 +31,18 @@ def _estimate_tokens(size_bytes: int) -> int:
     return size_bytes // 4
 
 
-def _estimate_cost(total_tokens: int, model: str) -> str:
-    """Estimate summarization cost. $0 for ollama models."""
+def _estimate_cost(total_tokens: int, model: str, num_sessions: int) -> str:
+    """Estimate summarization cost. Each session = 1 API call with truncated input."""
     if model.startswith("ollama/"):
         return "$0.00 (local)"
-    # Haiku: ~$0.25/M input + $1.25/M output. Summarize uses ~600 output tokens.
-    # Rough estimate: input dominates at ~2000 tokens/trace avg
+    # Summarizer truncates sessions to ~3K tokens input, ~500 tokens output per call
+    avg_input = 3000
+    avg_output = 500
     if "haiku" in model:
-        cost = (total_tokens / 1_000_000) * 0.25 + (total_tokens / 2000) * 600 * (1.25 / 1_000_000)
+        cost = num_sessions * (avg_input * 0.25 + avg_output * 1.25) / 1_000_000
         return f"~${cost:.2f}"
-    # Sonnet
     if "sonnet" in model:
-        cost = (total_tokens / 1_000_000) * 3.0 + (total_tokens / 2000) * 600 * (15.0 / 1_000_000)
+        cost = num_sessions * (avg_input * 3.0 + avg_output * 15.0) / 1_000_000
         return f"~${cost:.2f}"
     return "unknown"
 
@@ -211,7 +211,7 @@ def main():
     # Totals + cost
     total_tokens = cursor_tokens + claude_tokens
     total_files = len(cursor_files) + len(claude_files)
-    cost = _estimate_cost(total_tokens, summarize_model)
+    cost = _estimate_cost(total_tokens, summarize_model, total_files)
 
     print(f"\nTOTAL")
     print(f"  Sessions: {total_files}")

@@ -46,7 +46,7 @@ async def api_compile(request: Request):
     if not task and not tag:
         return JSONResponse({"error": "task or tag required"}, status_code=400)
     try:
-        cmd = [sys.executable, str(CONTEXT_DIR / "ctx-compile.py")]
+        cmd = [sys.executable, str(CONTEXT_DIR / "src" / "ctx-compile.py")]
         if tag:
             cmd.extend(["--tag", tag])
         if task:
@@ -81,7 +81,7 @@ async def api_synthesize(request: Request):
         return JSONResponse({"error": "sources required"}, status_code=400)
     if not output and not refine:
         return JSONResponse({"error": "output path required"}, status_code=400)
-    cmd = [sys.executable, str(CONTEXT_DIR / "ctx-synthesize.py")]
+    cmd = [sys.executable, str(CONTEXT_DIR / "src" / "ctx-synthesize.py")]
     for s in sources:
         cmd.extend(["--source", s])
     if output:
@@ -429,6 +429,48 @@ def list_knowledge():
     return [dict(zip(cols, r)) for r in rows]
 
 
+# ── API: Usage tracking ───────────────────────────────────────────────────────
+
+@app.get("/api/usage")
+def get_usage():
+    conn = get_db()
+    try:
+        conn.execute("SELECT 1 FROM usage LIMIT 1")
+    except Exception:
+        conn.close()
+        return {"rows": [], "summary": {"total_cost": 0, "total_input": 0, "total_output": 0, "by_task": {}, "by_day": {}}}
+    rows = conn.execute(
+        "SELECT id, ts, task, model, input_tokens, output_tokens, cost_usd, trace_id "
+        "FROM usage ORDER BY ts DESC"
+    ).fetchall()
+    cols = ["id", "ts", "task", "model", "input_tokens", "output_tokens", "cost_usd", "trace_id"]
+    items = [dict(zip(cols, r)) for r in rows]
+
+    # Summary aggregations
+    total_cost = sum(r["cost_usd"] for r in items)
+    total_input = sum(r["input_tokens"] for r in items)
+    total_output = sum(r["output_tokens"] for r in items)
+    by_task = {}
+    by_day = {}
+    for r in items:
+        t = r["task"]
+        if t not in by_task:
+            by_task[t] = {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0}
+        by_task[t]["calls"] += 1
+        by_task[t]["input_tokens"] += r["input_tokens"]
+        by_task[t]["output_tokens"] += r["output_tokens"]
+        by_task[t]["cost_usd"] += r["cost_usd"]
+        day = r["ts"][:10]
+        if day not in by_day:
+            by_day[day] = {"calls": 0, "cost_usd": 0, "input_tokens": 0, "output_tokens": 0}
+        by_day[day]["calls"] += 1
+        by_day[day]["cost_usd"] += r["cost_usd"]
+        by_day[day]["input_tokens"] += r["input_tokens"]
+        by_day[day]["output_tokens"] += r["output_tokens"]
+    conn.close()
+    return {"rows": items, "summary": {"total_cost": total_cost, "total_input": total_input, "total_output": total_output, "by_task": by_task, "by_day": by_day}}
+
+
 # ── HTML ───────────────────────────────────────────────────────────────────────
 
 HTML = r"""<!DOCTYPE html>
@@ -561,6 +603,7 @@ background:#FFF;font-size:.85rem;resize:vertical;min-height:120px}
   <button class="tab" onclick="sw('candidates')">Candidates</button>
   <button class="tab" onclick="sw('namespace')">Namespace</button>
   <button class="tab" onclick="sw('graph')">Graph</button>
+  <button class="tab" onclick="sw('usage')">Usage</button>
 </div>
 
 <!-- COMPILE -->
@@ -631,6 +674,14 @@ background:#FFF;font-size:.85rem;resize:vertical;min-height:120px}
   </div>
 </div>
 
+<!-- USAGE -->
+<div class="tc" id="tab-usage">
+  <div id="usage-summary"></div>
+  <div id="usage-by-day"></div>
+  <div id="usage-by-task"></div>
+  <div id="usage-table"></div>
+</div>
+
 <!-- FILE VIEWER -->
 <div class="fv" id="fv">
   <div class="fv-hdr">
@@ -657,7 +708,8 @@ function sw(n){document.querySelectorAll('.tab').forEach(t=>t.classList.remove('
 document.querySelectorAll('.tc').forEach(t=>t.classList.remove('active'));
 event.target.classList.add('active');document.getElementById('tab-'+n).classList.add('active');
 if(n==='graph')loadGraph();if(n==='learnings')loadLearnings();if(n==='namespace')loadNs();
-if(n==='compile')loadTags();if(n==='synthesize')loadExistingSkills();if(n==='candidates')loadCands();}
+if(n==='compile')loadTags();if(n==='synthesize')loadExistingSkills();if(n==='candidates')loadCands();
+if(n==='usage')loadUsage();}
 
 function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML}
 
@@ -938,6 +990,50 @@ async function loadSkillTr(slug){
 }
 
 // ── Init ──
+// ── Usage ──
+async function loadUsage(){
+  const d=await fetch('/api/usage').then(r=>r.json());
+  const s=d.summary;
+  // Summary cards
+  document.getElementById('usage-summary').innerHTML=
+    `<div class="sl">Total Usage</div>
+    <table><thead><tr><th>Total Cost</th><th>Input Tokens</th><th>Output Tokens</th><th>API Calls</th></tr></thead>
+    <tbody><tr><td>$${s.total_cost.toFixed(4)}</td><td>${s.total_input.toLocaleString()}</td>
+    <td>${s.total_output.toLocaleString()}</td><td>${d.rows.length}</td></tr></tbody></table>`;
+
+  // By task
+  const tasks=Object.entries(s.by_task);
+  if(tasks.length){
+    let h='<div class="sl">By Task</div><table><thead><tr><th>Task</th><th>Calls</th><th>Input</th><th>Output</th><th>Cost</th></tr></thead><tbody>';
+    tasks.sort((a,b)=>b[1].cost_usd-a[1].cost_usd);
+    for(const [t,v] of tasks){
+      h+=`<tr><td>${esc(t)}</td><td>${v.calls}</td><td>${v.input_tokens.toLocaleString()}</td><td>${v.output_tokens.toLocaleString()}</td><td>$${v.cost_usd.toFixed(4)}</td></tr>`;
+    }
+    document.getElementById('usage-by-task').innerHTML=h+'</tbody></table>';
+  }
+
+  // By day
+  const days=Object.entries(s.by_day);
+  if(days.length){
+    let h='<div class="sl">By Day</div><table><thead><tr><th>Date</th><th>Calls</th><th>Input</th><th>Output</th><th>Cost</th></tr></thead><tbody>';
+    days.sort((a,b)=>b[0].localeCompare(a[0]));
+    for(const [day,v] of days){
+      h+=`<tr><td>${day}</td><td>${v.calls}</td><td>${v.input_tokens.toLocaleString()}</td><td>${v.output_tokens.toLocaleString()}</td><td>$${v.cost_usd.toFixed(4)}</td></tr>`;
+    }
+    document.getElementById('usage-by-day').innerHTML=h+'</tbody></table>';
+  }
+
+  // Recent calls
+  if(d.rows.length){
+    let h='<div class="sl">Recent Calls</div><table><thead><tr><th>Time</th><th>Task</th><th>Model</th><th>In</th><th>Out</th><th>Cost</th><th>Trace</th></tr></thead><tbody>';
+    for(const r of d.rows.slice(0,100)){
+      const t=r.ts.replace('T',' ').slice(0,19);
+      h+=`<tr><td style="white-space:nowrap">${t}</td><td>${esc(r.task)}</td><td style="font-size:.75rem">${esc(r.model)}</td><td>${r.input_tokens.toLocaleString()}</td><td>${r.output_tokens.toLocaleString()}</td><td>$${r.cost_usd.toFixed(4)}</td><td style="font-size:.75rem">${r.trace_id||''}</td></tr>`;
+    }
+    document.getElementById('usage-table').innerHTML=h+'</tbody></table>';
+  }
+}
+
 loadStats();loadTags();
 </script>
 </body></html>"""
