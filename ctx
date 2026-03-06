@@ -449,6 +449,104 @@ def cmd_forget():
     print("  done")
 
 
+# ── ctx rm ────────────────────────────────────────────────────────────────────
+
+def cmd_rm():
+    """ctx rm <path> — remove a namespace file and all associated DB entries."""
+    args = sys.argv[2:]
+    if not args:
+        print("ctx rm: provide a file path (relative to ~/.context/)", file=sys.stderr)
+        print("  ctx rm plans/ctx-rebuild-plan.md", file=sys.stderr)
+        print("  ctx rm skills/external/my-skill/skill.md", file=sys.stderr)
+        sys.exit(1)
+
+    file_path = args[0]
+    full = CONTEXT_DIR / file_path
+    if not full.exists():
+        full = Path(file_path).expanduser().resolve()
+    if not full.exists():
+        print(f"ctx rm: file not found: {file_path}", file=sys.stderr)
+        sys.exit(1)
+
+    # Safety: only allow deletion within known namespaces
+    try:
+        rel = str(full.relative_to(CONTEXT_DIR))
+    except ValueError:
+        print(f"ctx rm: file must be inside ~/.context/", file=sys.stderr)
+        sys.exit(1)
+
+    valid_prefixes = ["patterns/", "debugging/", "skills/", "primitives/", "docs/", "plans/",
+                      "learnings/", "candidates/"]
+    if not any(rel.startswith(p) for p in valid_prefixes):
+        print(f"ctx rm: cannot delete files outside namespaces ({rel})", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Removing: {rel}")
+
+    # Clean up DB entries
+    if DB_PATH.exists():
+        conn = sqlite3.connect(DB_PATH)
+        # Derive source_id patterns this file might be stored under
+        ns = rel.split("/")[0]
+        if "/" in rel and rel.startswith("skills/"):
+            ns = "/".join(rel.split("/")[:2])
+        slug = full.stem
+        source_id = f"ns-{ns.replace('/', '-')}-{slug}"
+
+        # Remove from chunks table (by source_path or source_id)
+        try:
+            n = conn.execute("DELETE FROM chunks WHERE source_path = ? OR source_id = ?", (rel, source_id)).rowcount
+            if n:
+                print(f"  chunks: {n} removed")
+        except sqlite3.OperationalError:
+            pass
+
+        # Remove from knowledge table (by file_path)
+        try:
+            n = conn.execute("DELETE FROM knowledge WHERE file_path = ?", (rel,)).rowcount
+            if not n:
+                n = conn.execute("DELETE FROM knowledge WHERE file_path LIKE ?", (f"%{slug}%",)).rowcount
+            if n:
+                print(f"  knowledge: {n} removed")
+        except sqlite3.OperationalError:
+            pass
+
+        # If it's a learning, also clean traces/summaries/embeddings
+        if rel.startswith("learnings/"):
+            content = full.read_text()[:500]
+            m = re.search(r'^id:\s*(\S+)', content, re.MULTILINE)
+            if m:
+                trace_id = m.group(1)
+                conn.execute("DELETE FROM embeddings WHERE trace_id = ?", (trace_id,))
+                conn.execute("DELETE FROM summaries WHERE trace_id = ?", (trace_id,))
+                conn.execute("DELETE FROM traces WHERE id = ?", (trace_id,))
+                print(f"  trace: {trace_id} removed")
+
+        # If it's a candidate, remove from candidates table
+        if rel.startswith("candidates/"):
+            content = full.read_text()[:500]
+            m = re.search(r'^id:\s*(\S+)', content, re.MULTILINE)
+            if m:
+                cand_id = m.group(1)
+                conn.execute("DELETE FROM candidates WHERE id = ?", (cand_id,))
+                print(f"  candidate: {cand_id} removed")
+
+        conn.commit()
+        conn.close()
+
+    # Delete the file
+    full.unlink()
+    print(f"  deleted: {rel}")
+
+    # If parent dir is now empty (and it's a subdir like skills/external/my-skill/), clean up
+    parent = full.parent
+    if parent != CONTEXT_DIR and not any(parent.iterdir()):
+        parent.rmdir()
+        print(f"  cleaned: {parent.relative_to(CONTEXT_DIR)}/")
+
+    print("  done")
+
+
 # ── Usage + dispatch ───────────────────────────────────────────────────────────
 
 USAGE = """ctx -- personal knowledge infrastructure
@@ -465,6 +563,7 @@ Usage:
   ctx tag <file> <tag> [<tag2> ...]   add tags to a file's frontmatter
   ctx note "free text"                create a quick note in learnings/
   ctx forget <id>                     remove a trace and its data
+  ctx rm <path>                       remove a file + all DB entries (chunks, knowledge, etc.)
   ctx synthesize [flags]              synthesize skill/pattern from sources
 """
 
@@ -488,6 +587,7 @@ def main():
         "tag":        cmd_tag,
         "note":       cmd_note,
         "forget":     cmd_forget,
+        "rm":         cmd_rm,
         "synthesize": lambda: cmd_delegate("ctx-synthesize.py"),
     }
 

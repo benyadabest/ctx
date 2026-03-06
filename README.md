@@ -86,7 +86,8 @@ ctx push doc.md --namespace docs        # add file (auto-embeds + adds to knowle
 ctx push https://example.com -n docs    # add URL
 ctx note "TIL: something useful"        # quick note (auto-summarizes + embeds)
 ctx tag learnings/file.md my-tag        # add tags to frontmatter + knowledge table
-ctx forget trace-abc123                 # remove trace + all associated data
+ctx forget trace-abc123                 # remove a trace + all associated data
+ctx rm plans/old-plan.md                # remove a namespace file + all DB entries
 
 # Synthesis
 ctx synthesize --source https://example.com --output skills/external/new-skill --type skill
@@ -108,7 +109,7 @@ ctx synthesize --source https://example.com --output skills/external/new-skill -
 
 - **Adding**: `ctx push`, `ctx note`, and `ctx backfill` auto-embed new content
 - **Editing**: Edit files directly, then `ctx embed --all` to re-index
-- **Deleting**: `ctx forget` removes traces from all tables; `ctx embed --all` prunes chunks for files that no longer exist on disk
+- **Deleting**: `ctx forget` removes traces; `ctx rm` removes namespace files — both clean up all associated DB entries (chunks, knowledge, embeddings). `ctx embed --all` also prunes any stale chunks as a safety net
 - **Reindexing**: `ctx embed --all` re-embeds everything and cleans up stale references
 
 ## Dependencies

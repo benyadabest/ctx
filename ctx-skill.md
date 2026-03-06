@@ -48,12 +48,23 @@ ctx compile "design a rate limiter" --tag my-project
 # Contains: approach paragraph, relevant skills, learnings, open questions
 ```
 
+### Remove knowledge
+
+```bash
+# Remove a namespace file and all DB entries (chunks, knowledge, embeddings)
+ctx rm plans/old-plan.md
+ctx rm skills/external/outdated-skill/skill.md
+
+# Remove a trace (learning) and all associated data
+ctx forget trace-abc123
+```
+
 ### Pipeline operations
 
 ```bash
 ctx status          # check pipeline health, counts, processes
 ctx detect --force  # run pattern detection across all traces
-ctx embed --all     # re-embed all knowledge
+ctx embed --all     # re-embed all knowledge + prune stale chunks
 ctx serve           # start web UI at http://localhost:7337
 ```
 
@@ -75,7 +86,9 @@ ctx serve           # start web UI at http://localhost:7337
 - `ctx push` copies the file, chunks+embeds it, and adds it to the knowledge table
 - `ctx compile` searches both embeddings and chunks tables, ranks by 60% similarity + 25% frequency + 15% recency, and generates an approach paragraph grounded in your actual knowledge
 - `ctx forget <trace-id>` fully removes a trace from all tables (traces, summaries, embeddings, chunks, knowledge) and deletes the learning file
+- `ctx rm <path>` removes a namespace file and cleans up all DB entries (chunks, knowledge, candidates) — the inverse of `ctx push`
 - `ctx tag` updates both the file's frontmatter and the knowledge table
+- `ctx embed --all` re-embeds everything and prunes chunks for files that no longer exist on disk
 
 ## Integration Pattern
 
