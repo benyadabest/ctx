@@ -337,6 +337,18 @@ def main():
             chunk_total += n
             print(f"  [{it['namespace']}] {it['path'].name} -> {n} chunk(s)")
 
+    # ── Phase 3: Prune stale chunks for deleted files ──
+    stale_sources = []
+    all_chunks = conn.execute("SELECT DISTINCT source_id, source_path FROM chunks").fetchall()
+    for source_id, source_path in all_chunks:
+        if source_path and not (CONTEXT_DIR / source_path).exists():
+            stale_sources.append((source_id, source_path))
+    if stale_sources:
+        for source_id, source_path in stale_sources:
+            conn.execute("DELETE FROM chunks WHERE source_id = ?", (source_id,))
+            print(f"  [pruned] {source_path} (file deleted)")
+        conn.commit()
+
     now = datetime.now(timezone.utc).isoformat()
     conn.execute(
         "INSERT INTO meta (key, value) VALUES ('last_embed_ts', ?) "
@@ -346,7 +358,8 @@ def main():
     conn.commit()
 
     print(f"ctx-embed: done — {ok_traces}/{len(trace_items)} traces, "
-          f"{ok_ns}/{len(ns_items)} files ({chunk_total} chunks)")
+          f"{ok_ns}/{len(ns_items)} files ({chunk_total} chunks)"
+          f"{f', pruned {len(stale_sources)}' if stale_sources else ''}")
     conn.close()
 
 
