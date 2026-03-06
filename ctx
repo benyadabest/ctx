@@ -12,7 +12,7 @@ DB_PATH     = CONTEXT_DIR / "index.db"
 
 def _run_embed(source_id: str = None):
     """Run ctx-embed.py for a specific source or skip if not available."""
-    script = CONTEXT_DIR / "ctx-embed.py"
+    script = CONTEXT_DIR / "src" / "ctx-embed.py"
     if not script.exists():
         return
     cmd = [sys.executable, str(script)]
@@ -100,7 +100,7 @@ def cmd_status():
             print(f"  ctx-watcher: running (pid {result.stdout.strip()})")
         else:
             print("  ctx-watcher: not running")
-            print("    start with: python3 ~/.context/ctx-watcher.py &")
+            print("    start with: python3 ~/.context/src/ctx-watcher.py &")
     except Exception:
         print("  ctx-watcher: unknown")
 
@@ -125,7 +125,7 @@ def cmd_status():
 
 def cmd_delegate(script_name, extra_args=None):
     """Delegate to a ctx script, passing through remaining CLI args."""
-    script = CONTEXT_DIR / script_name
+    script = CONTEXT_DIR / "src" / script_name
     if not script.exists():
         print(f"ctx: {script_name} not found at {script}", file=sys.stderr)
         sys.exit(1)

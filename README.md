@@ -23,21 +23,23 @@ All scripts are independent — no imports between them except `model_router.py`
 
 ### Scripts
 
+All pipeline scripts live in `src/`. The `ctx` CLI at the root delegates to them.
+
 | Script | Purpose |
 |---|---|
-| `ctx` | CLI entry point |
-| `model_router.py` | Routes LLM calls by task to configured model |
-| `ctx-hook.py` | Cursor hook handler (stdin JSON → raw/) |
-| `ctx-ingest.py` | Parse raw sessions → learnings/ + SQLite |
-| `ctx-watcher.py` | Watches Claude Code sessions for changes |
-| `ctx-summarize.py` | Two-target extraction: portable + domain |
-| `ctx-embed.py` | Embedding + chunking (all-MiniLM-L6-v2) |
-| `ctx-discover.py` | List available sessions without ingesting |
-| `ctx-backfill.py` | Ingest historical sessions |
-| `ctx-detect.py` | Pattern detection across traces |
-| `ctx-compile.py` | Grounded briefing compiler |
-| `ctx-synthesize.py` | Skill/pattern synthesis from sources |
-| `ctx-serve.py` | Web UI (FastAPI, port 7337) |
+| `ctx` | CLI entry point (root) |
+| `src/model_router.py` | Routes LLM calls by task to configured model |
+| `src/ctx-hook.py` | Cursor hook handler (stdin JSON → raw/) |
+| `src/ctx-ingest.py` | Parse raw sessions → learnings/ + SQLite |
+| `src/ctx-watcher.py` | Watches Claude Code sessions for changes |
+| `src/ctx-summarize.py` | Two-target extraction: portable + domain |
+| `src/ctx-embed.py` | Embedding + chunking (all-MiniLM-L6-v2) |
+| `src/ctx-discover.py` | List available sessions without ingesting |
+| `src/ctx-backfill.py` | Ingest historical sessions |
+| `src/ctx-detect.py` | Pattern detection across traces |
+| `src/ctx-compile.py` | Grounded briefing compiler |
+| `src/ctx-synthesize.py` | Skill/pattern synthesis from sources |
+| `src/ctx-serve.py` | Web UI (FastAPI, port 7337) |
 
 ### Namespaces
 
