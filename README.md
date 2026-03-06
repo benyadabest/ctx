@@ -105,6 +105,18 @@ ctx synthesize --source https://example.com --output skills/external/new-skill -
 - **Graph** — Mermaid visualization of skill/pattern co-occurrence
 - **Usage** — API call tracking with costs by task and day
 
+### Learnings
+
+![Learnings tab](docs/screenshots/learnings.png)
+
+### Namespace Browser
+
+![Namespace tab](docs/screenshots/namespace.png)
+
+### Synthesize
+
+![Synthesize tab](docs/screenshots/synthesize.png)
+
 ## Data lifecycle
 
 - **Adding**: `ctx push`, `ctx note`, and `ctx backfill` auto-embed new content
