@@ -105,6 +105,10 @@ ctx synthesize --source https://example.com --output skills/external/new-skill -
 - **Graph** — Mermaid visualization of skill/pattern co-occurrence
 - **Usage** — API call tracking with costs by task and day
 
+### Compile
+
+![Compile tab](docs/screenshots/compile.png)
+
 ### Learnings
 
 ![Learnings tab](docs/screenshots/learnings.png)
