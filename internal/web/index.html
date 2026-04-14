@@ -504,6 +504,7 @@ async function sendChat(){
   try{
     const resp=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({messages:_chatMsgs.slice(0,-1),tag})});
+    if(!resp.ok){const err=await resp.json().catch(()=>({error:'Request failed'}));throw new Error(err.error||'Request failed');}
     const reader=resp.body.getReader();
     const decoder=new TextDecoder();
     let buffer='',fullText='';

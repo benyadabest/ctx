@@ -1,10 +1,12 @@
 package llm
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -237,6 +239,10 @@ func (c *Client) Stream(ctx context.Context, task string, messages []ChatMessage
 		}
 	} else {
 		inputTokens, outputTokens, err = c.streamBifrost(ctx, model, messages, system, onChunk)
+		// Fall back to direct Anthropic API if Bifrost fails
+		if err != nil && c.cfg.API.AnthropicAPIKey != "" {
+			inputTokens, outputTokens, err = c.streamAnthropicDirect(ctx, model, messages, system, onChunk)
+		}
 	}
 
 	if err != nil {
@@ -354,6 +360,7 @@ func (a *account) GetKeysForProvider(ctx context.Context, provider schemas.Model
 		{
 			ID:     "anthropic-1",
 			Value:  *schemas.NewEnvVar(a.apiKey),
+			Models: schemas.WhiteList{"*"},
 			Weight: 100,
 		},
 	}, nil
@@ -376,4 +383,116 @@ func (a *account) GetConfigForProvider(provider schemas.ModelProvider) (*schemas
 			BufferSize:  50,
 		},
 	}, nil
+}
+
+// ── Direct Anthropic API (fallback for OAuth tokens) ────────────────────────
+
+func (c *Client) streamAnthropicDirect(ctx context.Context, model string, messages []ChatMessage, system string, onChunk func(string)) (int, int, error) {
+	apiKey := c.cfg.API.AnthropicAPIKey
+	if apiKey == "" {
+		return 0, 0, fmt.Errorf("no API key configured")
+	}
+
+	baseURL := "https://api.anthropic.com"
+	if u := c.cfg.API.OllamaBaseURL; strings.Contains(u, "anthropic") {
+		baseURL = u
+	}
+
+	type msgContent struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	type apiMsg struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	}
+
+	var apiMessages []apiMsg
+	for _, m := range messages {
+		apiMessages = append(apiMessages, apiMsg{Role: m.Role, Content: m.Content})
+	}
+
+	reqBody := map[string]any{
+		"model":      model,
+		"max_tokens": 4096,
+		"system":     system,
+		"messages":   apiMessages,
+		"stream":     true,
+	}
+
+	bodyBytes, _ := json.Marshal(reqBody)
+	req, err := http.NewRequestWithContext(ctx, "POST", baseURL+"/v1/messages", bytes.NewReader(bodyBytes))
+	if err != nil {
+		return 0, 0, err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("anthropic-version", "2023-06-01")
+	// OAuth tokens use Authorization header; API keys use x-api-key
+	if strings.HasPrefix(apiKey, "sk-ant-oat") {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	} else {
+		req.Header.Set("x-api-key", apiKey)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, 0, fmt.Errorf("anthropic request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return 0, 0, fmt.Errorf("anthropic returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	var inputTokens, outputTokens int
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		data := strings.TrimPrefix(line, "data: ")
+		if data == "[DONE]" {
+			break
+		}
+
+		var event struct {
+			Type  string `json:"type"`
+			Delta struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"delta"`
+			Usage struct {
+				InputTokens  int `json:"input_tokens"`
+				OutputTokens int `json:"output_tokens"`
+			} `json:"usage"`
+		}
+		if err := json.Unmarshal([]byte(data), &event); err != nil {
+			continue
+		}
+
+		switch event.Type {
+		case "content_block_delta":
+			if event.Delta.Text != "" {
+				onChunk(event.Delta.Text)
+			}
+		case "message_delta":
+			outputTokens = event.Usage.OutputTokens
+		case "message_start":
+			// Extract input tokens from message_start
+			var startEvent struct {
+				Message struct {
+					Usage struct {
+						InputTokens int `json:"input_tokens"`
+					} `json:"usage"`
+				} `json:"message"`
+			}
+			json.Unmarshal([]byte(data), &startEvent)
+			inputTokens = startEvent.Message.Usage.InputTokens
+		}
+	}
+
+	return inputTokens, outputTokens, nil
 }

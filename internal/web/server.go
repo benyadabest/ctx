@@ -272,30 +272,40 @@ func (h *handler) apiChat(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "no user message found", 400)
 		return
 	}
+	if h.cfg.API.AnthropicAPIKey == "" {
+		jsonError(w, "Chat requires an API key. Set ANTHROPIC_API_KEY env var or add it to ~/.context/ctx.toml under [api].", 500)
+		return
+	}
 
 	client, err := llm.New(h.cfg, h.store)
 	if err != nil {
 		jsonError(w, "llm init: "+err.Error(), 500)
 		return
 	}
-	embedder := vectors.New(h.cfg.API.OllamaBaseURL, "all-minilm")
 	ctx := r.Context()
 
-	// Embed query + retrieve + rank
-	queryVec, err := embedder.Embed(ctx, query)
-	if err != nil {
-		jsonError(w, "embed: "+err.Error(), 500)
-		return
+	// Try embed query + retrieve + rank (optional — works without Ollama)
+	var knowledgeBlock string
+	var ranked []pipeline.RankedItem
+	embedder := vectors.New(h.cfg.API.OllamaBaseURL, "all-minilm")
+	if queryVec, embedErr := embedder.Embed(ctx, query); embedErr == nil {
+		if r, retrieveErr := pipeline.RetrieveAndRank(h.store, queryVec, h.cfg, body.Tag); retrieveErr == nil {
+			ranked = r
+			knowledgeBlock = pipeline.BuildKnowledgeBlock(ranked, 12)
+		}
 	}
 
-	ranked, err := pipeline.RetrieveAndRank(h.store, queryVec, h.cfg, body.Tag)
-	if err != nil {
-		jsonError(w, "retrieve: "+err.Error(), 500)
-		return
+	// Fallback: use FTS search if embeddings unavailable
+	if knowledgeBlock == "" {
+		if entries, searchErr := h.store.Search(query + "*"); searchErr == nil && len(entries) > 0 {
+			for i, e := range entries {
+				if i >= 12 {
+					break
+				}
+				knowledgeBlock += fmt.Sprintf("[%d] %s: %s\n\n", i+1, e.Key, e.Value)
+			}
+		}
 	}
-
-	// Build knowledge block with numbered citations
-	knowledgeBlock := pipeline.BuildKnowledgeBlock(ranked, 12)
 
 	system := `You are a context synthesis engine for a senior AI/ML engineer.
 Given a user question and relevant knowledge pieces retrieved from their past AI coding sessions,
