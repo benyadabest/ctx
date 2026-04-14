@@ -1,0 +1,27 @@
+Extract from this agent session:
+
+SESSION:
+{{.SessionBlock}}
+
+Return this exact JSON structure:
+{
+  "portable": {
+    "problem": "One sentence. Abstract class of problem. Zero project-specific nouns.",
+    "pattern": "1-2 sentences. Reusable approach. Forward-looking, not descriptive.",
+    "skills": ["slug-1", "slug-2", "slug-3"],
+    "pitfalls": "1-2 sentences. What to avoid regardless of project.",
+    "embedding_text": "2-3 sentences. No project names, no product names, no repo names. Optimized for semantic search across future sessions."
+  },
+  "domain": {
+    "project_tag": "slug of the project this belongs to, e.g. coach-chatbot",
+    "component": "which subsystem or component, e.g. eval-pipeline",
+    "knowledge": "What did this session reveal about HOW THIS SPECIFIC SYSTEM WORKS? Architecture decisions, implementation details, gotchas. Null if nothing project-specific was learned."
+  }
+}
+
+RULES:
+- portable.embedding_text must contain ZERO project-specific nouns
+- skills must be specific: "judge-calibration" not "ai-improvement"
+- If loop_count > 20, this was a deep session — reflect that depth
+- pattern must be forward-looking guidance, not a description of what happened
+- domain.knowledge is null if the session was generic/not project-specific

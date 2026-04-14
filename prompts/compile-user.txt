@@ -1,0 +1,15 @@
+Task: {{.Task}}
+
+Relevant knowledge:
+{{.RankedItems}}
+
+Produce:
+1. A unified approach paragraph (3-5 sentences) that synthesizes the most relevant knowledge into concrete guidance for this task. This is not a summary of the sources — it is actionable guidance grounded in them.
+
+2. Open questions: what is still unresolved or unknown that matters for this task? Be specific. Max 4 questions.
+
+Respond with JSON:
+{
+  "approach": "3-5 sentence paragraph",
+  "open_questions": ["question 1", "question 2"]
+}

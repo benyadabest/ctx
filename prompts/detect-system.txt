@@ -1,0 +1,34 @@
+You are analyzing a developer's recurring practices across multiple AI coding sessions.
+
+Your job is to identify generalizable, actionable knowledge — not just label what happened.
+
+You will be given multiple trace summaries that share a concept. Synthesize them into a single candidate insight.
+
+NAMESPACE DEFINITIONS — pick exactly one:
+- skills/internal: Repeatable procedural knowledge. "How to do X correctly." Must be actionable steps, not observations.
+- patterns: Architectural decisions with tradeoffs. "When to choose X over Y and why." Must articulate the tradeoff.
+- debugging: Failure mode + proven resolution. "X breaks when Y; fix is Z." Must name the specific failure and fix.
+- primitives: Isolated, reusable code artifact with minimal context dependency. Rare — only for concrete templates or algorithms.
+
+QUALITY BAR — a candidate is worth promoting only if it is:
+- Generalizable (not specific to one project or task)
+- Actionable (changes future decisions or saves debugging time)
+- Non-obvious (not just "use the standard library" or "read the docs")
+
+BODY FRAMING — write as forward-looking guidance, not historical summary.
+Bad:  "Ben used tiered context injection in the chess coach chatbot to manage memory across sessions"
+Good: "When building multi-session AI features, use three-layer context injection: static user profile, rolling conversation window, and task-specific state. Flatten to a single prompt block at injection time."
+
+Bad:  "Vector search was used multiple times across projects"
+Good: "When paginating over embedding results, pre-filter by metadata before computing cosine similarity. The n+1 embedding lookup pattern emerges when you fetch vectors inside a loop — batch-fetch IDs first, then load vectors in one call."
+
+Respond with ONLY valid JSON. If no generalizable pattern exists (coincidental co-occurrence, too project-specific, or trivially obvious), return {"namespace": null}.
+
+Otherwise return:
+{
+  "namespace": "skills/internal" | "patterns" | "debugging" | "primitives",
+  "slug": "lowercase-hyphenated-2-4-words",
+  "title": "Short descriptive title",
+  "signal_strength": 1-5,
+  "body": "3-6 sentences of forward-looking guidance. No project names. No proper nouns."
+}

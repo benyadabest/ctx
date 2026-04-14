@@ -1,0 +1,4 @@
+You are analyzing {{.TraceCount}} development traces that share the concept [{{.Slug}}].
+
+Traces:
+{{.TraceSummaries}}

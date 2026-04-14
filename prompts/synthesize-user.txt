@@ -1,0 +1,29 @@
+Source material:
+{{.Sources}}
+{{- if .Context}}
+
+Engineer context:
+{{.Context}}
+{{- end}}
+{{- if .ExistingSkill}}
+
+Existing skill to refine:
+{{.ExistingSkill}}
+{{- end}}
+{{- if .Feedback}}
+
+What to improve:
+{{.Feedback}}
+{{- end}}
+
+Produce a {{.Type}} definition:
+{
+  "name": "hyphenated-slug",
+  "description": "one sentence",
+  "when_to_use": "what situations call for this",
+  "process": ["step 1", "step 2", "step 3"],
+  "key_principles": ["principle 1", "principle 2", "principle 3"],
+  "pitfalls": ["pitfall 1", "pitfall 2"],
+  "tags": ["tag1", "tag2"],
+  "sources_used": ["url or filename for each source"]
+}
